@@ -296,7 +296,10 @@ func (p *fileParser) parsePackage(path string) (*fileParser, error) {
 		return nil, err
 	}
 
-	for _, pkg := range pkgs {
+	// Sorted descending: under the import path, the package overrides its
+	// external test package.
+	for _, pkgName := range slices.Backward(slices.Sorted(maps.Keys(pkgs))) {
+		pkg := pkgs[pkgName]
 		for _, filename := range slices.Sorted(maps.Keys(pkg.Files)) {
 			file := pkg.Files[filename]
 			// Resolved on first use: it runs "go list", and few of these
@@ -308,7 +311,10 @@ func (p *fileParser) parsePackage(path string) (*fileParser, error) {
 			})
 			for ni := range iterInterfaces(file) {
 				ni.fileImports = fileImports
+				// Keyed by import path for other packages, and by package
+				// name for the files of the directory.
 				newP.importedInterfaces.Set(path, ni.name.Name, ni)
+				newP.importedInterfaces.Set(pkgName, ni.name.Name, ni)
 			}
 		}
 	}
@@ -411,7 +417,7 @@ func (p *fileParser) parseMethod(field *ast.Field, it *namedInterface, iface *mo
 			// Embedded interface in this package.
 			embeddedIfaceType := p.auxInterfaces.Get(pkg, v.String())
 			if embeddedIfaceType == nil {
-				embeddedIfaceType = p.importedInterfaces.Get(pkg, v.String())
+				embeddedIfaceType = p.importedInterfaces.Get(it.pkgName, v.String())
 			}
 
 			var embeddedIface *model.Interface
@@ -436,7 +442,7 @@ func (p *fileParser) parseMethod(field *ast.Field, it *namedInterface, iface *mo
 						return nil, p.errorf(v.Pos(), "could not parse package %s: %v", pkg, err)
 					}
 
-					if embeddedIfaceType = ip.importedInterfaces.Get(pkg, v.String()); embeddedIfaceType == nil {
+					if embeddedIfaceType = ip.importedInterfaces.Get(it.pkgName, v.String()); embeddedIfaceType == nil {
 						return nil, p.errorf(v.Pos(), "unknown embedded interface %s.%s", pkg, v.String())
 					}
 
@@ -776,6 +782,7 @@ type namedInterface struct {
 	// fileImports returns the imports of the declaring file. It is nil for
 	// source and aux file interfaces, which use the parser's imports.
 	fileImports func() map[string]importedPackage
+	pkgName     string // package of the declaring file
 }
 
 // Create an iterator over all interfaces in file.
@@ -797,7 +804,7 @@ func iterInterfaces(file *ast.File) <-chan *namedInterface {
 					continue
 				}
 
-				ch <- &namedInterface{name: ts.Name, it: it, typeParams: getTypeSpecTypeParams(ts)}
+				ch <- &namedInterface{name: ts.Name, it: it, typeParams: getTypeSpecTypeParams(ts), pkgName: file.Name.Name}
 			}
 		}
 		close(ch)
